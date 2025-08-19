@@ -1,0 +1,4 @@
+/* Minimal custom styles to complement Tailwind */
+* { box-sizing: border-box; }
+summary { outline: none; }
+
