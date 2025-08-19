@@ -17,6 +17,24 @@
         <div class="text-xl font-bold">⚡ Easee EV Charger</div>
         <div class="ml-auto flex items-center gap-2">
           <button id="logout" class="hidden px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-sm">Logout</button>
+          <select id="themeSelect" class="px-2 py-1 rounded-md bg-slate-800 border border-white/10 text-sm">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+          <select id="unitsSelect" class="px-2 py-1 rounded-md bg-slate-800 border border-white/10 text-sm">
+            <option value="metric">Units: Metric</option>
+            <option value="imperial">Units: Imperial</option>
+          </select>
+          <select id="currencySelect" class="px-2 py-1 rounded-md bg-slate-800 border border-white/10 text-sm">
+            <option value="USD">$ USD</option>
+            <option value="EUR">€ EUR</option>
+            <option value="GBP">£ GBP</option>
+            <option value="NOK">kr NOK</option>
+          </select>
+          <select id="transportSelect" class="px-2 py-1 rounded-md bg-slate-800 border border-white/10 text-sm">
+            <option value="sse">Live: SSE</option>
+            <option value="poll">Live: Poll</option>
+          </select>
         </div>
       </div>
     </header>
@@ -117,13 +135,56 @@
 
         <!-- Last 24h -->
         <div class="rounded-2xl bg-slate-800/60 border border-white/10 p-6 shadow-xl">
-          <div class="font-semibold mb-2">Last 24 hours</div>
-          <div id="historyData" class="text-slate-200"></div>
+          <div class="flex items-center justify-between mb-2">
+            <div class="font-semibold">Last 24 hours</div>
+            <div class="text-sm text-slate-300">Per-session energy</div>
+          </div>
+          <canvas id="historyChart" height="100"></canvas>
+          <div id="historyData" class="text-slate-200 mt-4"></div>
         </div>
+
+        <!-- Overview of all chargers -->
+        <details class="rounded-2xl bg-slate-800/60 border border-white/10 p-6 shadow-xl">
+          <summary class="cursor-pointer font-semibold">All chargers overview</summary>
+          <div class="mt-4" id="overview">
+            <div class="text-sm text-slate-300">Click "Load Overview" to fetch current status of all chargers.</div>
+            <button id="loadOverviewBtn" class="mt-3 px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-sm">Load Overview</button>
+            <div id="overviewGrid" class="mt-4 grid md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+          </div>
+        </details>
       </section>
     </main>
 
     <script src="/main.js"></script>
+    <script>
+      (function(){
+        const themeSelect = document.getElementById('themeSelect');
+        const transportSelect = document.getElementById('transportSelect');
+        function syncSelects(){
+          try{
+            const prefs = JSON.parse(localStorage.getItem('easee_prefs')||'{}');
+            if (prefs.theme) themeSelect.value = prefs.theme;
+            if (prefs.liveTransport) transportSelect.value = prefs.liveTransport;
+          }catch{}
+        }
+        syncSelects();
+        themeSelect?.addEventListener('change',()=>{
+          try{
+            const prefs = JSON.parse(localStorage.getItem('easee_prefs')||'{}');
+            prefs.theme = themeSelect.value;
+            localStorage.setItem('easee_prefs', JSON.stringify(prefs));
+          }catch{}
+          if (window.applyTheme) window.applyTheme(themeSelect.value);
+        });
+        transportSelect?.addEventListener('change',()=>{
+          try{
+            const prefs = JSON.parse(localStorage.getItem('easee_prefs')||'{}');
+            prefs.liveTransport = transportSelect.value;
+            localStorage.setItem('easee_prefs', JSON.stringify(prefs));
+          }catch{}
+        });
+      })();
+    </script>
   </body>
   </html>
 

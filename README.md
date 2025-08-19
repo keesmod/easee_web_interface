@@ -11,7 +11,11 @@ References: See the official docs for capabilities and limitations: [Easee Devel
 - Live charging data with a real‑time chart
 - Set charging current, pause/resume charging
 - Current session info (time, energy, cost)
-- 24h energy view (sessions and total kWh)
+- 24h energy view (sessions and total kWh) with per‑session bar chart
+- Live updates via SSE with fallback to polling
+- Automatic token refresh using `refreshToken`
+- UI preferences: light/dark theme, units, currency, live transport
+- Basic multi‑charger overview panel
 
 ## Project layout
 
@@ -55,6 +59,20 @@ npm start
 
 Open `http://localhost:3000/`.
 
+### Docker
+
+Build and run with Docker or Compose:
+
+```bash
+cd server
+docker build -t easee-dashboard .
+# Run with environment variables
+docker run -e PORT=3000 -e SESSION_SECRET=change_me -e EASEE_API_BASE=https://api.easee.com -p 3000:3000 easee-dashboard
+
+# Or with compose
+docker compose up --build
+```
+
 ### Using the app
 
 1. Log in with your Easee username (email/phone) and password.
@@ -86,13 +104,14 @@ Notes:
 
 ### Suggestions for further improvements
 
-- Token lifecycle: automatic refresh using `refreshToken` to avoid frequent logins.
-- Live updates: switch from polling to SSE/WebSocket/AMQP when available.
-- Analytics: add a 24h energy chart with per‑session breakdown.
-- UI polish: theming (light/dark), units/currency preferences, multi‑charger overview.
-- Error handling: friendlier messages and known Easee error mapping.
-- Packaging: Dockerfile and `docker-compose.yml` for one‑command runs.
-- Tests/CI: mock the Easee API and add integration tests.
+- Implemented:
+  - Token lifecycle: automatic refresh using `refreshToken` to avoid frequent logins.
+  - Live updates: Server‑Sent Events (SSE) with fallback to polling.
+  - Analytics: 24h energy chart with per‑session breakdown (bar chart).
+  - UI polish: theming (light/dark), units/currency preferences, and a basic multi‑charger overview.
+  - Error handling: friendlier messages and known Easee error mapping.
+  - Packaging: Dockerfile and `docker-compose.yml` for one‑command runs.
+  - Tests: mock the Easee API and add integration tests.
 
 #### “Remember me” / storing login
 
@@ -103,6 +122,16 @@ Prefer storing tokens (access/refresh) instead of raw passwords.
 - If persisting secrets, encrypt with a KMS (Vault, AWS KMS) and never expose to the client.
 
 I can add a “Remember me” option that saves and refreshes tokens securely; let me know your preference.
+
+### Tests
+
+Run unit/integration tests (mocked Easee API):
+
+```bash
+cd server
+npm install
+npm test
+```
 
 ### Troubleshooting
 
