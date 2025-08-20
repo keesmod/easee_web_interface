@@ -476,10 +476,6 @@ transportSelectEl?.addEventListener('change', () => { userPrefs.liveTransport = 
 unitsSelectEl?.addEventListener('change', () => { userPrefs.units = unitsSelectEl.value; savePreferences(); });
 currencySelectEl?.addEventListener('change', () => { userPrefs.currency = currencySelectEl.value; savePreferences(); });
 
-<<<<<<< Current (Your changes)
-
-
-=======
 // Past sessions explorer UI
 const pastFromEl = document.getElementById('pastFrom');
 const pastToEl = document.getElementById('pastTo');
@@ -539,4 +535,3 @@ pastBtn?.addEventListener('click', async () => {
 		pastContainer.textContent = (e && e.message) ? e.message : 'Failed to load sessions';
 	}
 });
->>>>>>> Incoming (Background Agent changes)
