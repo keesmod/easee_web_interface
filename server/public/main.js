@@ -30,6 +30,10 @@ const loginMessage = document.getElementById('login-message');
 // Chart
 let liveChart;
 let liveTimer = null;
+let eventSource = null;
+let useSSE = true;
+let userPrefs = { theme: 'dark', units: 'metric', currency: 'USD', liveTransport: 'sse' };
+let historyChart;
 
 // basic visibility that the script loaded
 console.log('[easee-ui] script loaded');
@@ -110,6 +114,17 @@ function initChart() {
 	});
 }
 
+function initHistoryChart() {
+	const ctx = document.getElementById('historyChart');
+	if (!ctx) return;
+	if (historyChart) { historyChart.destroy(); }
+	historyChart = new Chart(ctx, {
+		type: 'bar',
+		data: { labels: [], datasets: [{ label: 'Energy (kWh)', data: [], backgroundColor: '#22c55e' }] },
+		options: { responsive: true, plugins: { legend: { labels: { color: '#cbd5e1' } } }, scales: { x: { ticks: { color: '#cbd5e1' } }, y: { ticks: { color: '#cbd5e1' } } } }
+	});
+}
+
 function pushLivePoints(outputA, allowedA, maxA) {
 	if (!liveChart) return;
 	const ts = new Date();
@@ -134,7 +149,9 @@ async function handleLogin(e){
 		showDashboard(true);
 		await loadChargers();
 		initChart();
-		startLivePolling();
+		initHistoryChart();
+		loadPreferences();
+		startLive();
 		loginMessage.textContent='Logged in.';
 	}catch(err){
 		loginMessage.textContent=err.message;
@@ -148,6 +165,7 @@ logoutBtn.addEventListener('click', async () => {
 	try { await api('/api/logout', { method: 'POST' }); } catch {}
 	showDashboard(false);
 	if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+	if (eventSource) { eventSource.close(); eventSource = null; }
 	if (liveChart) { liveChart.destroy(); liveChart = null; }
 });
 
@@ -224,6 +242,92 @@ function startLivePolling() {
 	liveTimer = setInterval(tick, 5000);
 }
 
+function startSSE() {
+	if (eventSource) { eventSource.close(); eventSource = null; }
+	const id = getChargerId();
+	if (!id) return;
+	const url = `/api/stream?chargerId=${encodeURIComponent(id)}`;
+	const es = new EventSource(url, { withCredentials: true });
+	es.addEventListener('state', (e) => {
+		try { const data = JSON.parse(e.data); updateStateFromData(data); } catch {}
+	});
+	es.addEventListener('session', (e) => {
+		try { const s = JSON.parse(e.data); updateSessionFromData(s); } catch {}
+	});
+	es.addEventListener('history', (e) => {
+		try { const h = JSON.parse(e.data); updateHistoryFromData(h); } catch {}
+	});
+	es.addEventListener('error', (e) => {
+		console.warn('SSE error', e);
+	});
+	es.addEventListener('ping', () => {});
+	es.onerror = () => {
+		// fallback to polling
+		useSSE = false;
+		savePreferences();
+		startLivePolling();
+		es.close();
+	};
+	eventSource = es;
+}
+
+function updateStateFromData(data){
+	if (!data) return;
+	if (liveDataEl) liveDataEl.textContent = JSON.stringify(data, null, 2);
+	const outputA = Number(data.outputCurrent || 0);
+	const allowedA = Number(data.dynamicChargerCurrent || 0);
+	const maxA = Number(data.cableRating || 0);
+	const voltage = Number(data.voltage || 230);
+	const phases = (data.dynamicCircuitCurrentP2 != null && data.dynamicCircuitCurrentP3 != null) ? 3 : 1;
+	const kW = Number(data.totalPower || ((outputA * voltage * phases) / 1000));
+	if (powerDisplay && Number.isFinite(kW)) powerDisplay.textContent = kW.toFixed(2);
+	if (currentValueEl && Number.isFinite(allowedA)) currentValueEl.textContent = String(currentSlider?.value || allowedA);
+	if (totalEnergyEl && data.lifetimeEnergy != null) totalEnergyEl.textContent = `${Number(data.lifetimeEnergy).toFixed(2)} kWh`;
+	if (sessionEnergyEl && data.sessionEnergy != null) sessionEnergyEl.textContent = `${Number(data.sessionEnergy).toFixed(2)} kWh`;
+	pushLivePoints(outputA, allowedA, maxA);
+}
+
+function updateSessionFromData(s){
+	if (!s) {
+		if (sessionTimeEl) sessionTimeEl.textContent = '—';
+		if (sessionEnergyEl) sessionEnergyEl.textContent = '— kWh';
+		if (sessionCostEl) sessionCostEl.textContent = '—';
+		return;
+	}
+	const started = s.startTime || s.started || s.start;
+	const energy = Number(s.kwh ?? s.energy ?? s.totalEnergy ?? 0);
+	const cost = s.cost ?? s.totalCost ?? null;
+	const durationMs = started ? (Date.now() - new Date(started).getTime()) : null;
+	const duration = durationMs ? msToHMS(durationMs) : '—';
+	if (sessionTimeEl) sessionTimeEl.textContent = duration;
+	if (sessionEnergyEl) sessionEnergyEl.textContent = `${energy.toFixed(2)} kWh`;
+	if (sessionCostEl) sessionCostEl.textContent = cost != null ? `${cost}` : '—';
+}
+
+function updateHistoryFromData(h){
+	if (!h) return;
+	try {
+		const labels = h.sessions.map((s, i) => s.startTime?.slice(11,16) || `#${i+1}`);
+		const data = h.sessions.map((s) => Number(s.kwh ?? s.energy ?? s.totalEnergy ?? 0));
+		if (historyChart) {
+			historyChart.data.labels = labels;
+			historyChart.data.datasets[0].data = data;
+			historyChart.update();
+		}
+	} catch {}
+	if (historyDataEl) {
+		historyDataEl.innerHTML = `
+			<div class="text-sm text-slate-300">${h.from} → ${h.to}</div>
+			<div class="mt-1 text-lg">Total: <span class="font-semibold">${h.totalKwh.toFixed(3)} kWh</span> across ${h.sessionsCount} sessions</div>
+		`;
+	}
+}
+
+function startLive(){
+	useSSE = (userPrefs.liveTransport || 'sse') === 'sse';
+	if (useSSE && window.EventSource) startSSE(); else startLivePolling();
+}
+
 async function loadSession() {
 	const chargerId = getChargerId();
 	if (!chargerId) return;
@@ -294,8 +398,66 @@ async function loadChargers() {
 }
 
 chargerSelect?.addEventListener('change', () => {
-	startLivePolling();
+	if (eventSource) { eventSource.close(); eventSource = null; }
+	startLive();
 });
+
+// Overview: fetch all chargers and basic state
+const loadOverviewBtn = document.getElementById('loadOverviewBtn');
+const overviewGrid = document.getElementById('overviewGrid');
+loadOverviewBtn?.addEventListener('click', async () => {
+	try {
+		const chargers = await api('/api/chargers');
+		overviewGrid.innerHTML = '';
+		for (const c of chargers) {
+			const id = c.id || c.chargerId || c.serial;
+			if (!id) continue;
+			let state = null;
+			try { state = await api(`/api/state?chargerId=${encodeURIComponent(id)}`); } catch {}
+			const kW = (state && Number(state.totalPower)) ? Number(state.totalPower) : 0;
+			const card = document.createElement('div');
+			card.className = 'rounded-xl bg-slate-800/60 border border-white/10 p-4';
+			card.innerHTML = `<div class="font-semibold">${c.name || 'Unnamed'} (${id})</div><div class="text-sm text-slate-300">Power: ${kW.toFixed(2)} kW</div>`;
+			overviewGrid.appendChild(card);
+		}
+	} catch (e) {
+		overviewGrid.textContent = 'Failed to load overview';
+	}
+});
+
+// Preferences: theme/units/currency/transport
+function savePreferences(){
+	try { localStorage.setItem('easee_prefs', JSON.stringify(userPrefs)); } catch {}
+}
+function loadPreferences(){
+	try {
+		const raw = localStorage.getItem('easee_prefs');
+		if (raw) userPrefs = { ...userPrefs, ...JSON.parse(raw) };
+		applyTheme(userPrefs.theme);
+	} catch {}
+}
+function applyTheme(theme){
+	const body = document.body;
+	if (!body) return;
+	if (theme === 'light') {
+		body.classList.remove('from-slate-900','to-slate-950','text-slate-50');
+		body.classList.add('from-white','to-slate-100','text-slate-900');
+	} else {
+		body.classList.add('from-slate-900','to-slate-950','text-slate-50');
+		body.classList.remove('from-white','to-slate-100','text-slate-900');
+	}
+}
+
+// Wire header selects to userPrefs
+window.applyTheme = applyTheme;
+const themeSelectEl = document.getElementById('themeSelect');
+const transportSelectEl = document.getElementById('transportSelect');
+const unitsSelectEl = document.getElementById('unitsSelect');
+const currencySelectEl = document.getElementById('currencySelect');
+themeSelectEl?.addEventListener('change', () => { userPrefs.theme = themeSelectEl.value; savePreferences(); applyTheme(userPrefs.theme); });
+transportSelectEl?.addEventListener('change', () => { userPrefs.liveTransport = transportSelectEl.value; savePreferences(); if (eventSource) { eventSource.close(); eventSource = null; } startLive(); });
+unitsSelectEl?.addEventListener('change', () => { userPrefs.units = unitsSelectEl.value; savePreferences(); });
+currencySelectEl?.addEventListener('change', () => { userPrefs.currency = currencySelectEl.value; savePreferences(); });
 
 
 
