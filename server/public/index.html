@@ -23,11 +23,10 @@
           </select>
           <select id="unitsSelect" class="px-2 py-1 rounded-md bg-slate-800 border border-white/10 text-sm">
             <option value="metric">Units: Metric</option>
-            <option value="imperial">Units: Imperial</option>
           </select>
           <select id="currencySelect" class="px-2 py-1 rounded-md bg-slate-800 border border-white/10 text-sm">
+            <option value="EUR" selected>€ EUR</option>
             <option value="USD">$ USD</option>
-            <option value="EUR">€ EUR</option>
             <option value="GBP">£ GBP</option>
             <option value="NOK">kr NOK</option>
           </select>
@@ -108,7 +107,7 @@
         </div>
 
         <!-- Info cards -->
-        <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-6">
           <div class="rounded-2xl bg-slate-800/60 border border-white/10 p-6 shadow-xl">
             <div class="text-slate-300 text-sm">Session Time</div>
             <div id="sessionTime" class="text-2xl font-semibold">—</div>
@@ -124,6 +123,10 @@
           <div class="rounded-2xl bg-slate-800/60 border border-white/10 p-6 shadow-xl">
             <div class="text-slate-300 text-sm">Total Energy</div>
             <div id="totalEnergy" class="text-2xl font-semibold">— kWh</div>
+          </div>
+          <div class="rounded-2xl bg-slate-800/60 border border-white/10 p-6 shadow-xl">
+            <div class="text-slate-300 text-sm">Phase Mode</div>
+            <div id="phaseMode" class="text-2xl font-semibold">—</div>
           </div>
         </div>
 
@@ -142,6 +145,25 @@
           <canvas id="historyChart" height="100"></canvas>
           <div id="historyData" class="text-slate-200 mt-4"></div>
         </div>
+
+        <!-- Past sessions explorer -->
+        <details class="rounded-2xl bg-slate-800/60 border border-white/10 p-6 shadow-xl">
+          <summary class="cursor-pointer font-semibold">Past sessions</summary>
+          <div class="mt-4 grid sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
+            <div>
+              <label class="block text-sm mb-1">From</label>
+              <input id="pastFrom" type="datetime-local" class="w-full px-3 py-2 rounded-lg bg-slate-900/70 border border-white/10 focus:outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm mb-1">To</label>
+              <input id="pastTo" type="datetime-local" class="w-full px-3 py-2 rounded-lg bg-slate-900/70 border border-white/10 focus:outline-none" />
+            </div>
+            <div class="md:col-span-1">
+              <button id="loadPastSessions" class="px-3 py-2 rounded-md bg-slate-700 hover:bg-slate-600 text-sm w-full">Load past sessions</button>
+            </div>
+          </div>
+          <div id="pastSessionsContainer" class="mt-4 text-sm text-slate-200"></div>
+        </details>
 
         <!-- Overview of all chargers -->
         <details class="rounded-2xl bg-slate-800/60 border border-white/10 p-6 shadow-xl">

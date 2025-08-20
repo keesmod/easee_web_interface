@@ -197,6 +197,32 @@ app.get('/api/sessions-24h', requireAuth, async (req, res) => {
     const sessions = await withAutoRefresh(req, (client) =>
       client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions`, { params: { from: fromIso, to: toIso } })
         .then(r => Array.isArray(r.data) ? r.data : [])
+        .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
+    );
+    let totalKwh = 0;
+    for (const s of sessions) {
+      const kwh = s.kwh ?? s.energy ?? s.totalEnergy ?? s.total_kwh ?? 0;
+      if (typeof kwh === 'number') totalKwh += kwh;
+    }
+    res.json({ from: fromIso, to: toIso, sessionsCount: sessions.length, totalKwh, sessions });
+  } catch (err) {
+    const mapped = mapEaseeError(err);
+    res.status(mapped.status).json({ error: mapped.error });
+  }
+});
+
+// Past sessions over an arbitrary time window
+app.get('/api/sessions-range', requireAuth, async (req, res) => {
+  try {
+    const chargerId = req.query.chargerId;
+    const fromIso = req.query.from;
+    const toIso = req.query.to;
+    if (!chargerId) return res.status(400).json({ error: 'chargerId is required' });
+    if (!fromIso || !toIso) return res.status(400).json({ error: 'from and to are required ISO timestamps' });
+    const sessions = await withAutoRefresh(req, (client) =>
+      client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions`, { params: { from: fromIso, to: toIso } })
+        .then(r => Array.isArray(r.data) ? r.data : [])
+        .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
     );
     let totalKwh = 0;
     for (const s of sessions) {
@@ -293,6 +319,7 @@ app.get('/api/stream', requireAuth, async (req, res) => {
           const sessions = await withAutoRefresh(req, (client) =>
             client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions`, { params: { from: fromIso, to: toIso } })
               .then(r => Array.isArray(r.data) ? r.data : [])
+              .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
           );
           let totalKwh = 0;
           for (const s of sessions) {

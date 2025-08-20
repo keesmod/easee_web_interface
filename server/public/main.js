@@ -32,13 +32,13 @@ let liveChart;
 let liveTimer = null;
 let eventSource = null;
 let useSSE = true;
-let userPrefs = { theme: 'dark', units: 'metric', currency: 'USD', liveTransport: 'sse' };
+let userPrefs = { theme: 'dark', units: 'metric', currency: 'EUR', liveTransport: 'sse' };
 let historyChart;
 
 // basic visibility that the script loaded
 console.log('[easee-ui] script loaded');
 window.addEventListener('error', (e) => {
-    console.error('[easee-ui] window error', e?.error || e?.message || e);
+	console.error('[easee-ui] window error', e?.error || e?.message || e);
 });
 
 function showDashboard(isLoggedIn) {
@@ -148,6 +148,12 @@ async function handleLogin(e){
 		await api('/api/login',{method:'POST',body:{username:usernameInput.value.trim(),password:passwordInput.value}});
 		showDashboard(true);
 		await loadChargers();
+		// Auto-select charger: if exactly one, select it; if multiple, select first
+		try {
+			if (chargerSelect && chargerSelect.options && chargerSelect.options.length >= 2) {
+				chargerSelect.selectedIndex = 1;
+			}
+		} catch {}
 		initChart();
 		initHistoryChart();
 		loadPreferences();
@@ -218,6 +224,8 @@ async function loadLive() {
 		const phases = (data.dynamicCircuitCurrentP2 != null && data.dynamicCircuitCurrentP3 != null) ? 3 : 1;
 		const kW = Number(data.totalPower || ((outputA * voltage * phases) / 1000));
 		if (powerDisplay && Number.isFinite(kW)) powerDisplay.textContent = kW.toFixed(2);
+		const phaseModeEl = document.getElementById('phaseMode');
+		if (phaseModeEl) phaseModeEl.textContent = phases === 3 ? 'Three‑phase' : 'Single‑phase';
 		if (currentValueEl && Number.isFinite(allowedA)) currentValueEl.textContent = String(currentSlider?.value || allowedA);
 
 		if (totalEnergyEl && data.lifetimeEnergy != null) totalEnergyEl.textContent = `${Number(data.lifetimeEnergy).toFixed(2)} kWh`;
@@ -281,6 +289,8 @@ function updateStateFromData(data){
 	const phases = (data.dynamicCircuitCurrentP2 != null && data.dynamicCircuitCurrentP3 != null) ? 3 : 1;
 	const kW = Number(data.totalPower || ((outputA * voltage * phases) / 1000));
 	if (powerDisplay && Number.isFinite(kW)) powerDisplay.textContent = kW.toFixed(2);
+	const phaseModeEl = document.getElementById('phaseMode');
+	if (phaseModeEl) phaseModeEl.textContent = phases === 3 ? 'Three‑phase' : 'Single‑phase';
 	if (currentValueEl && Number.isFinite(allowedA)) currentValueEl.textContent = String(currentSlider?.value || allowedA);
 	if (totalEnergyEl && data.lifetimeEnergy != null) totalEnergyEl.textContent = `${Number(data.lifetimeEnergy).toFixed(2)} kWh`;
 	if (sessionEnergyEl && data.sessionEnergy != null) sessionEnergyEl.textContent = `${Number(data.sessionEnergy).toFixed(2)} kWh`;
@@ -363,8 +373,8 @@ async function loadHistory() {
 				<div class="mt-1 text-lg">Total: <span class="font-semibold">${h.totalKwh.toFixed(3)} kWh</span> across ${h.sessionsCount} sessions</div>
 			`;
 		}
-	} catch (err) {
-		if (historyDataEl) historyDataEl.textContent = err.message;
+	} catch (_err) {
+		if (historyDataEl) historyDataEl.textContent = 'No data for last 24 hours.';
 	}
 }
 
@@ -392,6 +402,11 @@ async function loadChargers() {
 			opt.textContent = `${name} (${opt.value})`;
 			chargerSelect.appendChild(opt);
 		});
+		// Auto-select logic when list arrives
+		if (chargerSelect.options.length >= 2) {
+			chargerSelect.selectedIndex = 1;
+			startLive();
+		}
 	} catch (e) {
 		console.warn('Failed to load chargers', e);
 	}
@@ -433,6 +448,8 @@ function loadPreferences(){
 	try {
 		const raw = localStorage.getItem('easee_prefs');
 		if (raw) userPrefs = { ...userPrefs, ...JSON.parse(raw) };
+		if (!userPrefs.currency) userPrefs.currency = 'EUR';
+		if (!userPrefs.units) userPrefs.units = 'metric';
 		applyTheme(userPrefs.theme);
 	} catch {}
 }
@@ -459,5 +476,67 @@ transportSelectEl?.addEventListener('change', () => { userPrefs.liveTransport = 
 unitsSelectEl?.addEventListener('change', () => { userPrefs.units = unitsSelectEl.value; savePreferences(); });
 currencySelectEl?.addEventListener('change', () => { userPrefs.currency = currencySelectEl.value; savePreferences(); });
 
+<<<<<<< Current (Your changes)
 
 
+=======
+// Past sessions explorer UI
+const pastFromEl = document.getElementById('pastFrom');
+const pastToEl = document.getElementById('pastTo');
+const pastBtn = document.getElementById('loadPastSessions');
+const pastContainer = document.getElementById('pastSessionsContainer');
+
+function toLocalDateTimeInputValue(d){
+	const pad = (n) => String(n).padStart(2,'0');
+	const yyyy = d.getFullYear();
+	const mm = pad(d.getMonth()+1);
+	const dd = pad(d.getDate());
+	const hh = pad(d.getHours());
+	const mi = pad(d.getMinutes());
+	return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+}
+
+// Prefill defaults: last 7 days
+if (pastFromEl && pastToEl) {
+	const to = new Date();
+	const from = new Date(to.getTime() - 7*24*60*60*1000);
+	pastFromEl.value = toLocalDateTimeInputValue(from);
+	pastToEl.value = toLocalDateTimeInputValue(to);
+}
+
+pastBtn?.addEventListener('click', async () => {
+	const chargerId = getChargerId();
+	if (!chargerId) return;
+	const from = pastFromEl?.value ? new Date(pastFromEl.value).toISOString() : null;
+	const to = pastToEl?.value ? new Date(pastToEl.value).toISOString() : null;
+	if (!from || !to) return;
+	pastContainer.textContent = 'Loading…';
+	try {
+		const resp = await api(`/api/sessions-range?chargerId=${encodeURIComponent(chargerId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+		const rows = resp.sessions.map((s,i)=>{
+			const started = s.startTime || s.started || s.start || s.start_time || '';
+			const ended = s.endTime || s.ended || s.end || s.end_time || '';
+			const kwh = Number(s.kwh ?? s.energy ?? s.totalEnergy ?? s.total_kwh ?? 0).toFixed(3);
+			return `<tr class="border-b border-white/5">
+				<td class="py-1 pr-3 whitespace-nowrap">${i+1}</td>
+				<td class="py-1 pr-3">${started ? new Date(started).toLocaleString() : '—'}</td>
+				<td class="py-1 pr-3">${ended ? new Date(ended).toLocaleString() : '—'}</td>
+				<td class="py-1 pr-3 text-right">${kwh} kWh</td>
+			</tr>`;
+		}).join('');
+		pastContainer.innerHTML = `
+			<div class="text-sm text-slate-300">${resp.from} → ${resp.to}</div>
+			<div class="mt-1">Total: <span class="font-semibold">${resp.totalKwh.toFixed(3)} kWh</span> across ${resp.sessionsCount} sessions</div>
+			<div class="overflow-x-auto mt-3">
+				<table class="min-w-full text-sm">
+					<thead class="text-slate-300">
+						<tr><th class="text-left pr-3">#</th><th class="text-left pr-3">Start</th><th class="text-left pr-3">End</th><th class="text-right">Energy</th></tr>
+					</thead>
+					<tbody>${rows || '<tr><td class="py-2" colspan="4">No sessions</td></tr>'}</tbody>
+				</table>
+			</div>`;
+	} catch (e) {
+		pastContainer.textContent = (e && e.message) ? e.message : 'Failed to load sessions';
+	}
+});
+>>>>>>> Incoming (Background Agent changes)
