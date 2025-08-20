@@ -29,6 +29,20 @@ app.use(
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Simple in-memory cache to reduce upstream API traffic and avoid rate limits
+// Keyed by a string; each entry stores { value, expiresAt }
+const apiCache = new Map();
+function cacheGet(key) {
+  const entry = apiCache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt > Date.now()) return entry.value;
+  apiCache.delete(key);
+  return undefined;
+}
+function cacheSet(key, value, ttlMs) {
+  apiCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
+
 function requireAuth(req, res, next) {
   if (!req.session || !req.session.accessToken) {
     return res.status(401).json({ error: 'Not authenticated' });
@@ -154,7 +168,11 @@ app.get('/api/state', requireAuth, async (req, res) => {
   try {
     const chargerId = req.query.chargerId;
     if (!chargerId) return res.status(400).json({ error: 'chargerId is required' });
+    const cacheKey = `state:${chargerId}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) return res.json(cached);
     const data = await withAutoRefresh(req, (client) => client.get(`/api/chargers/${encodeURIComponent(chargerId)}/state`).then(r => r.data));
+    cacheSet(cacheKey, data, 3000); // 3s cache
     res.json(data);
   } catch (err) {
     const mapped = mapEaseeError(err);
@@ -164,7 +182,11 @@ app.get('/api/state', requireAuth, async (req, res) => {
 
 app.get('/api/chargers', requireAuth, async (req, res) => {
   try {
+    const cacheKey = 'chargers:list';
+    const cached = cacheGet(cacheKey);
+    if (cached) return res.json(cached);
     const data = await withAutoRefresh(req, (client) => client.get('/api/chargers').then(r => r.data));
+    cacheSet(cacheKey, data, 30_000); // 30s cache
     res.json(data);
   } catch (err) {
     const mapped = mapEaseeError(err);
@@ -176,7 +198,11 @@ app.get('/api/session', requireAuth, async (req, res) => {
   try {
     const chargerId = req.query.chargerId;
     if (!chargerId) return res.status(400).json({ error: 'chargerId is required' });
+    const cacheKey = `session:${chargerId}`;
+    const cached = cacheGet(cacheKey);
+    if (cached !== undefined) return res.json(cached);
     const data = await withAutoRefresh(req, (client) => client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions/ongoing`).then(r => r.data));
+    cacheSet(cacheKey, data ?? null, 3000); // 3s cache
     res.json(data);
   } catch (err) {
     const status = err.response?.status || 500;
@@ -194,11 +220,14 @@ app.get('/api/sessions-24h', requireAuth, async (req, res) => {
     const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
     const toIso = to.toISOString();
     const fromIso = from.toISOString();
-    const sessions = await withAutoRefresh(req, (client) =>
+    const cacheKey = `sessions24h:${chargerId}:${fromIso}:${toIso}`;
+    const cached = cacheGet(cacheKey);
+    const sessions = cached ?? await withAutoRefresh(req, (client) =>
       client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions`, { params: { from: fromIso, to: toIso } })
         .then(r => Array.isArray(r.data) ? r.data : [])
         .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
     );
+    if (!cached) cacheSet(cacheKey, sessions, 60_000); // 60s cache
     let totalKwh = 0;
     for (const s of sessions) {
       const kwh = s.kwh ?? s.energy ?? s.totalEnergy ?? s.total_kwh ?? 0;
@@ -219,11 +248,14 @@ app.get('/api/sessions-range', requireAuth, async (req, res) => {
     const toIso = req.query.to;
     if (!chargerId) return res.status(400).json({ error: 'chargerId is required' });
     if (!fromIso || !toIso) return res.status(400).json({ error: 'from and to are required ISO timestamps' });
-    const sessions = await withAutoRefresh(req, (client) =>
+    const cacheKey = `sessionsRange:${chargerId}:${fromIso}:${toIso}`;
+    const cached = cacheGet(cacheKey);
+    const sessions = cached ?? await withAutoRefresh(req, (client) =>
       client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions`, { params: { from: fromIso, to: toIso } })
         .then(r => Array.isArray(r.data) ? r.data : [])
         .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
     );
+    if (!cached) cacheSet(cacheKey, sessions, 60_000); // 60s cache
     let totalKwh = 0;
     for (const s of sessions) {
       const kwh = s.kwh ?? s.energy ?? s.totalEnergy ?? s.total_kwh ?? 0;
@@ -298,6 +330,11 @@ app.get('/api/stream', requireAuth, async (req, res) => {
   let isClosed = false;
   req.on('close', () => { isClosed = true; clearInterval(timer); });
 
+  // Throttle 24h history to once per minute to stay well below rate limits
+  let lastHistory = null;
+  let lastHistoryTs = 0;
+  const HISTORY_TTL = 60_000; // 60s
+
   function send(event, data) {
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -308,27 +345,31 @@ app.get('/api/stream', requireAuth, async (req, res) => {
 
   async function loadAllOnce() {
     try {
-      const [state, session, history] = await Promise.all([
+      const [state, session] = await Promise.all([
         withAutoRefresh(req, (client) => client.get(`/api/chargers/${encodeURIComponent(chargerId)}/state`).then(r => r.data)),
-        withAutoRefresh(req, (client) => client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions/ongoing`).then(r => r.data).catch(e => (e.response?.status === 404 ? null : Promise.reject(e)))),
-        (async () => {
-          const to = new Date();
-          const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
-          const toIso = to.toISOString();
-          const fromIso = from.toISOString();
-          const sessions = await withAutoRefresh(req, (client) =>
-            client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions`, { params: { from: fromIso, to: toIso } })
-              .then(r => Array.isArray(r.data) ? r.data : [])
-              .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
-          );
-          let totalKwh = 0;
-          for (const s of sessions) {
-            const kwh = s.kwh ?? s.energy ?? s.totalEnergy ?? s.total_kwh ?? 0;
-            if (typeof kwh === 'number') totalKwh += kwh;
-          }
-          return { from: fromIso, to: toIso, sessionsCount: sessions.length, totalKwh, sessions };
-        })()
+        withAutoRefresh(req, (client) => client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions/ongoing`).then(r => r.data).catch(e => (e.response?.status === 404 ? null : Promise.reject(e))))
       ]);
+
+      let history = lastHistory;
+      if (!history || (Date.now() - lastHistoryTs) > HISTORY_TTL) {
+        const to = new Date();
+        const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
+        const toIso = to.toISOString();
+        const fromIso = from.toISOString();
+        const sessions = await withAutoRefresh(req, (client) =>
+          client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions`, { params: { from: fromIso, to: toIso } })
+            .then(r => Array.isArray(r.data) ? r.data : [])
+            .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
+        );
+        let totalKwh = 0;
+        for (const s of sessions) {
+          const kwh = s.kwh ?? s.energy ?? s.totalEnergy ?? s.total_kwh ?? 0;
+          if (typeof kwh === 'number') totalKwh += kwh;
+        }
+        history = { from: fromIso, to: toIso, sessionsCount: sessions.length, totalKwh, sessions };
+        lastHistory = history;
+        lastHistoryTs = Date.now();
+      }
       send('state', state);
       send('session', session);
       send('history', history);
@@ -339,7 +380,8 @@ app.get('/api/stream', requireAuth, async (req, res) => {
   }
 
   await loadAllOnce();
-  const timer = setInterval(() => { if (!isClosed) loadAllOnce(); }, 5000);
+  // Slightly slower tick to reduce total request rate
+  const timer = setInterval(() => { if (!isClosed) loadAllOnce(); }, 7000);
 });
 
 const serverInstance = app.listen(process.env.NODE_ENV === 'test' ? 0 : PORT, () => {
