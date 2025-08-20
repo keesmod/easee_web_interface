@@ -205,7 +205,7 @@ app.get('/api/session', requireAuth, async (req, res) => {
     const cached = cacheGet(cacheKey);
     if (cached !== undefined) return res.json(cached);
     const data = await withAutoRefresh(req, (client) => client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions/ongoing`).then(r => r.data));
-    cacheSet(cacheKey, data ?? null, 3000); // 3s cache
+    cacheSet(cacheKey, data ?? null, 15_000); // 15s cache
     res.json(data);
   } catch (err) {
     const status = err.response?.status || 500;
@@ -384,7 +384,7 @@ app.get('/api/stream', requireAuth, async (req, res) => {
 
   await loadAllOnce();
   // Slightly slower tick to reduce total request rate
-  const timer = setInterval(() => { if (!isClosed) loadAllOnce(); }, 7000);
+  const timer = setInterval(() => { if (!isClosed) loadAllOnce(); }, 8000);
 });
 
 const serverInstance = app.listen(process.env.NODE_ENV === 'test' ? 0 : PORT, () => {

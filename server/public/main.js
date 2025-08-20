@@ -243,8 +243,16 @@ function startLivePolling() {
 		const id = getChargerId();
 		if (!id) return; // wait until user picks a charger
 		loadLive();
-		loadSession();
-		loadHistory();
+		// session endpoint can be rate limited; poll it less frequently
+		if (!tick._lastSession || Date.now() - tick._lastSession > 15000) {
+			loadSession();
+			tick._lastSession = Date.now();
+		}
+		// history is heavier; throttle to once per minute
+		if (!tick._lastHistory || Date.now() - tick._lastHistory > 60000) {
+			loadHistory();
+			tick._lastHistory = Date.now();
+		}
 	};
 	tick();
 	liveTimer = setInterval(tick, 5000);
