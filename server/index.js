@@ -32,7 +32,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Simple in-memory cache to reduce upstream API traffic and avoid rate limits
 // Keyed by a string; each entry stores { value, expiresAt }
 const apiCache = new Map();
+const ENABLE_CACHE = (process.env.ENABLE_CACHE ?? 'true') !== 'false' && process.env.NODE_ENV !== 'test';
 function cacheGet(key) {
+  if (!ENABLE_CACHE) return undefined;
   const entry = apiCache.get(key);
   if (!entry) return undefined;
   if (entry.expiresAt > Date.now()) return entry.value;
@@ -40,6 +42,7 @@ function cacheGet(key) {
   return undefined;
 }
 function cacheSet(key, value, ttlMs) {
+  if (!ENABLE_CACHE) return;
   apiCache.set(key, { value, expiresAt: Date.now() + ttlMs });
 }
 
