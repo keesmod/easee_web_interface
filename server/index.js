@@ -205,7 +205,7 @@ app.get('/api/session', requireAuth, async (req, res) => {
     const cached = cacheGet(cacheKey);
     if (cached !== undefined) return res.json(cached);
     const data = await withAutoRefresh(req, (client) => client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions/ongoing`).then(r => r.data));
-    cacheSet(cacheKey, data ?? null, 15_000); // 15s cache
+    cacheSet(cacheKey, data ?? null, 120_000); // 120s cache to reduce upstream rate
     res.json(data);
   } catch (err) {
     const status = err.response?.status || 500;
@@ -230,7 +230,7 @@ app.get('/api/sessions-24h', requireAuth, async (req, res) => {
         .then(r => Array.isArray(r.data) ? r.data : [])
         .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
     );
-    if (!cached) cacheSet(cacheKey, sessions, 60_000); // 60s cache
+    if (!cached) cacheSet(cacheKey, sessions, 360_000); // 6m cache to align with upstream rate limits
     let totalKwh = 0;
     for (const s of sessions) {
       const kwh = s.kwh ?? s.energy ?? s.totalEnergy ?? s.total_kwh ?? 0;
@@ -336,7 +336,7 @@ app.get('/api/stream', requireAuth, async (req, res) => {
   // Throttle 24h history to once per minute to stay well below rate limits
   let lastHistory = null;
   let lastHistoryTs = 0;
-  const HISTORY_TTL = 60_000; // 60s
+  const HISTORY_TTL = 360_000; // 6m
 
   function send(event, data) {
     res.write(`event: ${event}\n`);
@@ -348,9 +348,33 @@ app.get('/api/stream', requireAuth, async (req, res) => {
 
   async function loadAllOnce() {
     try {
+      // Always fetch state frequently; throttle sessions endpoints via shared cache
       const [state, session] = await Promise.all([
         withAutoRefresh(req, (client) => client.get(`/api/chargers/${encodeURIComponent(chargerId)}/state`).then(r => r.data)),
-        withAutoRefresh(req, (client) => client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions/ongoing`).then(r => r.data).catch(e => (e.response?.status === 404 ? null : Promise.reject(e))))
+        (async () => {
+          const ongoingKey = `session:ongoing:${chargerId}`;
+          const cachedOngoing = cacheGet(ongoingKey);
+          if (cachedOngoing !== undefined) return cachedOngoing;
+          try {
+            const data = await withAutoRefresh(req, (client) => client
+              .get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions/ongoing`)
+              .then(r => r.data));
+            cacheSet(ongoingKey, data ?? null, 120_000); // 2m cache
+            return data ?? null;
+          } catch (e) {
+            const status = e.response?.status;
+            if (status === 404) {
+              cacheSet(ongoingKey, null, 120_000);
+              return null;
+            }
+            if (status === 429) {
+              // Back off for 6 minutes to respect upstream rate limits
+              cacheSet(ongoingKey, null, 360_000);
+              return null;
+            }
+            throw e;
+          }
+        })()
       ]);
 
       let history = lastHistory;
@@ -359,11 +383,26 @@ app.get('/api/stream', requireAuth, async (req, res) => {
         const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
         const toIso = to.toISOString();
         const fromIso = from.toISOString();
-        const sessions = await withAutoRefresh(req, (client) =>
-          client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions`, { params: { from: fromIso, to: toIso } })
-            .then(r => Array.isArray(r.data) ? r.data : [])
-            .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
-        );
+        const histKey = `sessions24h:${chargerId}:${fromIso}:${toIso}`;
+        let sessions = cacheGet(histKey);
+        if (sessions === undefined) {
+          try {
+            sessions = await withAutoRefresh(req, (client) =>
+              client.get(`/api/chargers/${encodeURIComponent(chargerId)}/sessions`, { params: { from: fromIso, to: toIso } })
+                .then(r => Array.isArray(r.data) ? r.data : [])
+                .catch(err => (err.response?.status === 404 ? [] : Promise.reject(err)))
+            );
+            cacheSet(histKey, sessions, 360_000); // 6m shared cache
+          } catch (e) {
+            if (e.response?.status === 429) {
+              // Back off for 6 minutes and present last known history if available
+              cacheSet(histKey, Array.isArray(sessions) ? sessions : [], 360_000);
+              sessions = Array.isArray(lastHistory?.sessions) ? lastHistory.sessions : [];
+            } else {
+              throw e;
+            }
+          }
+        }
         let totalKwh = 0;
         for (const s of sessions) {
           const kwh = s.kwh ?? s.energy ?? s.totalEnergy ?? s.total_kwh ?? 0;
